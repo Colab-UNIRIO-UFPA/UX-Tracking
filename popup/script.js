@@ -12,7 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const username = $("#username").val();
         const password = $("#password").val();
 
-        $.post("http://localhost:5000/external/userAuth",
+        $.post("http://localhost/external/userAuth",
           {
             username: username,
             password: password

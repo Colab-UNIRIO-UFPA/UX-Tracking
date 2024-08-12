@@ -1,5 +1,5 @@
 //const serverUrl = "https://uxtracking.andrepereira.eng.br/external";
-const serverUrl = "http://localhost:5000/external";
+const serverUrl = "http://localhost/external";
 
 // Cria um objeto Date com a data e hora atuais
 var datetime = new Date();
