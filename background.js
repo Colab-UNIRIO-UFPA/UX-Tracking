@@ -1,35 +1,41 @@
-//const serverUrl = "https://uxtracking.andrepereira.eng.br/external";
-const serverUrl = "http://localhost/external";
-
+const serverUrl = "http://localhost:5000/external";
 // Cria um objeto Date com a data e hora atuais
 var datetime = new Date();
-var timeInternal = 0;
 var userId = '';
-var domain = "";
-var lastTime = 0;
-var timeInitial = Math.round(Date.now() / 1000);
-
-var isPopupPending = false; // Flag para verificar se uma popup está pendente
-var popupTimeout; // Referência para o timeout
-var popupInterval = 0;
-
-
-chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
-    chrome.storage.sync.get(['authToken', 'record'], function (data) {
-        if (data.authToken) {
-            userId = data.authToken;
-            if (data.record) {
-                handleRequest(request, sendResponse);
-            }
-        } else {
-            handleNoAuthToken();
-        }
-    });
-    return true; // Para tratamento assíncrono de sendResponse
+chrome.storage.sync.get(['authToken'], function (data) {
+    if (data) {
+        userId = data.authToken;
+    }
 });
 
-function handleRequest(request, sendResponse) {
+chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
     switch (request.type) {
+        case "getServerUrl":
+            sendResponse({ reply: serverUrl });
+            break;
+        case "startRecording":
+            console.log('Iniciando a captura de dados.');
+            chrome.storage.sync.get(['authToken'], function (data) {
+                userId = data.authToken;
+            });
+            break;
+        case "stopRecording":
+            // Enviar a mensagem para o content.js
+            chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+                if (tabs.length > 0 && tabs[0].id) {
+                    chrome.tabs.sendMessage(tabs[0].id, { type: "stopRecording" }, function (response) {
+                        if (chrome.runtime.lastError) {
+                            // O content script não está ativo ou ocorreu outro erro
+                            console.log("Capture de dados interrompida fora da aba.");
+                        } else {
+                            console.log("Capture de dados interrompida na aba.");
+                        }
+                    });
+                } else {
+                    console.log('Nenhuma aba ativa encontrada para parar a captura.');
+                }
+            });
+            break;
         case "inferencia":
             sendFace(request.data)
                 .then(responseData => sendResponse(JSON.parse(responseData)))
@@ -45,16 +51,8 @@ function handleRequest(request, sendResponse) {
             capture(request.data, request.pageHeight);
             break;
     }
-}
-
-function handleNoAuthToken() {
-    if (popupInterval >= 30000) {
-        notifyLoginRequired();
-        console.log('User ID is not set.');
-        popupInterval = 0; // Reset interval
-    }
-    popupInterval += 1000;
-}
+    return true; // Para tratamento assíncrono de sendResponse
+});
 
 function capture(data, pageHeight) {
     chrome.windows.getCurrent(function (win) {
@@ -110,22 +108,3 @@ async function sendFace(image) {
     });
     return response.text();
 }
-
-function notifyLoginRequired() {
-    var options = {
-        type: 'basic',
-        iconUrl: 'logo.png',
-        title: 'UX-Tracking: Login necessário!',
-        message: 'Faça o login para iniciar a captura!',
-        buttons: [{ title: 'Fazer login' }]
-    };
-    chrome.notifications.create('loginNotification', options, function () {
-        chrome.notifications.onButtonClicked.addListener(function (notificationId, buttonIndex) {
-            if (notificationId === 'loginNotification' && buttonIndex === 0) {
-                chrome.windows.create({ url: 'popup/index.html', type: 'popup', width: 300, height: 350 });
-            }
-        });
-    });
-}
-
-setInterval(() => popupInterval += 1000, 1000);

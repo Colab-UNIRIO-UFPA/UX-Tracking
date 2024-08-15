@@ -16,7 +16,6 @@
         "/vendor/jquery-3.4.1.min.js",
         "/vendor/browser-polyfill-0.10.0.min.js",
         "content.js",
-        "background.js",
         "main.js"
       ]
     }

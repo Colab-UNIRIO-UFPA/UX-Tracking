@@ -1,5 +1,7 @@
+let pageHeight = 0;
+
 // Obter a altura da página
-const pageHeight = Math.max(document.body.scrollHeight, document.body.offsetHeight);
+pageHeight = Math.max(document.body.scrollHeight, document.body.offsetHeight);
 
 // Injetar o iframe na página
 const iframe = document.createElement('iframe');
@@ -7,7 +9,6 @@ iframe.src = chrome.runtime.getURL('iframe.html');
 iframe.style.display = 'none';
 iframe.allow = 'microphone; camera';
 document.body.appendChild(iframe);
-
 // Inicializar variáveis de mouse e teclado
 let mouse = { id: "", class: "", x: 0, y: 0 };
 let keyboard = { id: "", class: "", x: 0, y: 0, Typed: "" };
@@ -16,8 +17,13 @@ let keyboard = { id: "", class: "", x: 0, y: 0, Typed: "" };
 let dataDict = { type: [], time: [], class: [], id: [], x: [], y: [], value: [], scroll: [] };
 
 // Variáveis de tempo
-const timeInterval = 1000;
-let freeze = 0, clocker = 0, eye_tick = 0, face_tick = 0, send_tick = 0;
+clocker = 0;
+let eyeInterval;
+let faceInterval;
+let sendInterval;
+let freezeInterval;
+let clockInterval;
+let contentInterval;
 
 // Função para obter coordenadas da tela
 function getScreenCoordinates(obj) {
@@ -39,8 +45,9 @@ function storeInter(interDict) {
 
 // Configurar ouvintes de mouse
 function setupMouseListeners() {
-    document.addEventListener('mousemove', throttle(storeMouseData, 300));
+    document.addEventListener('mousemove', storeMouseData);
     document.addEventListener('click', storeMouseData);
+    document.addEventListener('wheel', storeMouseData);
 }
 // Configurar ouvintes de teclado
 function setupKeyboardListeners() {
@@ -48,6 +55,8 @@ function setupKeyboardListeners() {
 }
 
 function storeMouseData(e) {
+    clearTimeout(freezeInterval);
+    freezeInterval = setTimeout(storeInter, 10000, { type: 'freeze', x: mouse.x, y: mouse.y, id: mouse.id, class: mouse.class, value: null });
     mouse.id = e.target.id;
     mouse.class = e.target.className;
     mouse.x = e.pageX;
@@ -75,19 +84,6 @@ function handleKeyDown(e) {
         });
         keyboard.typed = '';
     }
-}
-
-function throttle(callback, limit) {
-    let waiting = false;
-    return function () {
-        if (!waiting) {
-            callback.apply(this, arguments);
-            waiting = true;
-            setTimeout(() => {
-                waiting = false;
-            }, limit);
-        }
-    };
 }
 
 // Configurar ouvintes de WebGazer
@@ -125,7 +121,6 @@ function setupWebGazerVideo() {
     }
 }
 
-
 // Configurar ouvintes de microfone
 function setupMicrophoneListeners() {
     // Solicitar início da captura de áudio
@@ -152,80 +147,124 @@ function setupMicrophoneListeners() {
     });
 }
 
+function eyeCapture() {
+    webgazer.setGazeListener(data => {
+        if (data) {
+            storeInter({ type: 'eye', x: Math.round(data.x), y: Math.round(data.y), class: mouse.class, id: mouse.id, value: null });
+        }
+    }).begin();
+}
 
-// Configurar ouvintes de eventos
-function setupEventListeners() {
+function faceCapture() {
+    iframe.contentWindow.postMessage({ action: 'captureUserImage' }, '*');
+    window.addEventListener('message', (event) => {
+        if (event.data.action === 'userImageResult') {
+            imageDataUrl = event.data.data;
+            chrome.runtime.sendMessage({ type: "inferencia", data: imageDataUrl }, response => {
+                if (response) {
+                    storeInter({
+                        type: 'face',
+                        x: mouse.x,
+                        y: mouse.y,
+                        class: mouse.class,
+                        id: mouse.id,
+                        value: response
+                    });
+                }
+            });
+        }
+    });
+}
+
+function startClock() {
+    // Atualiza o clocker a cada segundo (1000 ms)
+    return setInterval(() => {
+        clocker++;
+    }, 1000);
+}
+
+function stopClock(clockInterval) {
+    clearInterval(clockInterval); // Para a atualização do clocker
+    clocker = 0; // Opcional: redefinir o clocker para 0
+}
+
+function sendData() {
+    chrome.runtime.sendMessage({ type: 'sendData', data: dataDict, pageHeight });
+    Object.keys(dataDict).forEach(key => dataDict[key] = []);
+}
+
+// Inicializar a captura de dados
+function startRecording() {
     const settings = ['mouse', 'keyboard', 'camera', 'microphone'];
+    // Configurar ouvintes de eventos
     settings.forEach(setting => {
         browser.storage.sync.get([setting]).then(result => {
             if (result[setting]) {
-                if (setting === 'mouse') setupMouseListeners();
+                if (setting === 'mouse') {
+                    setupMouseListeners();
+                    freezeInterval = setTimeout(storeInter, 10000, { type: 'freeze', x: mouse.x, y: mouse.y, id: mouse.id, class: mouse.class, value: null });
+                }
                 if (setting === 'keyboard') setupKeyboardListeners();
-                if (setting === 'camera') webgazer.begin().then(setupWebGazerVideo);
+                if (setting === 'camera') {
+                    webgazer.begin().then(setupWebGazerVideo);
+                    faceInterval = setInterval(faceCapture, 10000); // Executar a captura da face a cada 10 segundos
+                    eyeInterval = setInterval(eyeCapture, 2000); // Executar a captura de olho a cada 2 segundos
+                }
                 if (setting === 'microphone') setupMicrophoneListeners();
             } else {
                 console.error(`${setting} desabilitado ou não acessível.`);
             }
         });
     });
+    sendInterval = setInterval(sendData, 5000);
+    // Iniciar o clock
+    clockInterval = startClock();
 }
 
-// Inicializar a extensão
-function initializeExtension() {
-    setupEventListeners();
-    setInterval(tick, timeInterval);
+// Parar a captura de dados
+function stopRecording() {
+    // Parar o relógio
+    stopClock(clockInterval);
+    // Remover ouvintes de mouse
+    document.removeEventListener('mousemove', storeMouseData);
+    document.removeEventListener('click', storeMouseData);
+
+    // Remover ouvintes de teclado
+    document.removeEventListener('keydown', handleKeyDown);
+
+    // Parar o webgazer (captura de olho)
+    if (typeof webgazer !== 'undefined') {
+        webgazer.end();  // Parar o WebGazer e limpar recursos
+    }
+
+    // Parar intervalos de captura de rosto e envio de dados
+    clearInterval(faceInterval);
+    clearInterval(eyeInterval);
+    clearInterval(sendInterval);
+
+    // Limpar o iframe e parar a captura de microfone
+    document.body.removeChild(iframe);
+
+    // Parar qualquer timeout ativo
+    clearTimeout(freezeInterval);
+
+    // Opcionalmente, você pode limpar o dicionário de dados
+    Object.keys(dataDict).forEach(key => dataDict[key] = []);
 }
 
-// Funções temporizadas
-function tick() {
-    freeze += timeInterval / 1000;
-    clocker += timeInterval / 1000;
-    eye_tick += timeInterval / 1000;
-    face_tick += timeInterval / 1000;
-    send_tick += timeInterval / 1000;
-
-    if (freeze >= 10) {
-        storeInter({ type: 'freeze', x: mouse.x, y: mouse.y, id: mouse.id, class: mouse.class, value: null });
-        freeze = 0;
-    }
-
-    if (eye_tick >= 2) {
-        eye_tick = 0;
-        webgazer.setGazeListener(data => {
-            if (data) {
-                storeInter({ type: 'eye', x: Math.round(data.x), y: Math.round(data.y), class: mouse.class, id: mouse.id, value: null });
-            }
-        }).begin();
-    }
-
-    if (face_tick >= 10) {
-        iframe.contentWindow.postMessage({ action: 'captureUserImage' }, '*');
-        window.addEventListener('message', (event) => {
-            if (event.data.action === 'userImageResult') { 
-                imageDataUrl = event.data.data;
-                chrome.runtime.sendMessage({ type: "inferencia", data: imageDataUrl }, response => {
-                    if (response) {
-                        storeInter({
-                            type: 'face',
-                            x: mouse.x,
-                            y: mouse.y,
-                            class: mouse.class,
-                            id: mouse.id,
-                            value: response
-                        });
-                    }
-                });
-            }
-        });
-        
-        face_tick = 0;
-    }
-
-    if (send_tick >= 4) {
-        chrome.runtime.sendMessage({ type: 'sendData', data: dataDict, pageHeight });
-        Object.keys(dataDict).forEach(key => dataDict[key] = []);
-        send_tick = 0;
-    }
+// Controle da captura de dados
+function initializeContent() {
+    chrome.storage.sync.get(['record'], function (data) {
+        record = data.record;
+        if (record) {
+            clearInterval(contentInterval);
+            startRecording();
+        }
+    });
 }
-
-initializeExtension();
+contentInterval = setInterval(initializeContent, 1000);
+chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+    if (request.type === "stopRecording") {
+        stopRecording();
+    }
+});
