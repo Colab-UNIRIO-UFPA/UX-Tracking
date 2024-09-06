@@ -24,6 +24,7 @@ let sendInterval;
 let freezeInterval;
 let clockInterval;
 let contentInterval;
+let mouseTimeout;
 
 // Função para obter coordenadas da tela
 function getScreenCoordinates(obj) {
@@ -55,20 +56,25 @@ function setupKeyboardListeners() {
 }
 
 function storeMouseData(e) {
-    clearTimeout(freezeInterval);
-    freezeInterval = setTimeout(storeInter, 10000, { type: 'freeze', x: mouse.x, y: mouse.y, id: mouse.id, class: mouse.class, value: null });
-    mouse.id = e.target.id;
-    mouse.class = e.target.className;
-    mouse.x = e.pageX;
-    mouse.y = e.pageY;
-    storeInter({
-        type: e.type,
-        x: mouse.x,
-        y: mouse.y,
-        id: mouse.id,
-        class: mouse.class,
-        value: null
-    });
+    clearTimeout(mouseTimeout);  // Limpa o timeout anterior
+    mouseTimeout = setTimeout(() => {  // Define um novo timeout
+        clearTimeout(freezeInterval);
+        freezeInterval = setTimeout(storeInter, 10000, { type: 'freeze', x: mouse.x, y: mouse.y, id: mouse.id, class: mouse.class, value: null });
+        // Captura as informações do mouse
+        mouse.id = e.target.id;
+        mouse.class = e.target.className;
+        mouse.x = e.pageX;
+        mouse.y = e.pageY;
+        // Armazena as interações
+        storeInter({
+            type: e.type,
+            x: mouse.x,
+            y: mouse.y,
+            id: mouse.id,
+            class: mouse.class,
+            value: null
+        });
+    }, 200);  // Tempo de timeout em milissegundos
 }
 
 function handleKeyDown(e) {
@@ -92,22 +98,36 @@ function setupWebGazerVideo() {
     if (!video) {
         video = document.createElement('video');
         video.id = 'webgazerVideoFeed';
+        video.style.display = 'none'; // Garante que o vídeo nunca seja exibido
         document.body.appendChild(video);
     }
 
     Object.assign(video.style, {
-        display: 'none',
         position: 'absolute',
         top: '0px',  // Defina conforme necessário
         left: '0px', // Defina conforme necessário
         width: '320px', // Defina conforme necessário
         height: '240px' // Defina conforme necessário
     });
+}
 
-    // Configure webgazer aqui, se necessário
+// Configurar ouvintes de microfone
+// Função para inicializar a captura de áudio
+function setupMicrophoneListeners() {
+    navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => {
+            startAudioCapture();
+        })
+        .catch(error => {
+            console.log(`Erro ao acessar o microfone: ${error.message}`);
+        });
+}
+// Função para capturar um único rastreio de gaze e parar imediatamente
+function eyeCapture() {
     if (typeof webgazer !== 'undefined') {
         webgazer.setGazeListener(function (data, elapsedTime) {
             if (data) {
+                // Captura um único rastreio ocular
                 storeInter({
                     type: 'eye',
                     x: Math.round(data.x),
@@ -116,43 +136,49 @@ function setupWebGazerVideo() {
                     id: mouse.id,
                     value: null
                 });
+
+                // Pausa a captura imediatamente após o primeiro rastreio
+                stopEyeCapture();
             }
-        }).begin();
+        }).resume();  // Inicia a captura sob demanda
     }
 }
 
-// Configurar ouvintes de microfone
-function setupMicrophoneListeners() {
-    // Solicitar início da captura de áudio
-    iframe.onload = () => {
-        iframe.contentWindow.postMessage({ action: 'startAudioCapture' }, '*');
-    };
-    // Receber os dados de áudio do iframe
-    window.addEventListener('message', (event) => {
-        if (event.data.action === 'error') {
-            console.error(`Erro na captura de áudio: ${event.data.data}`);
-        } else if (event.data.action === 'audioResult') {
-            const saidWords = event.data.data; // Array de transcrições
-            const combinedTranscript = saidWords.map(saidWord => saidWord.transcript).join(' ');
-
-            storeInter({
-                type: 'voice',
-                x: mouse.x,
-                y: mouse.y,
-                class: mouse.class,
-                id: mouse.id,
-                value: { text: combinedTranscript },
-            });
-        }
-    });
+// Função para pausar a captura de dados de gaze
+function stopEyeCapture() {
+    if (typeof webgazer !== 'undefined') {
+        webgazer.pause();  // Pausa a captura de dados oculares
+        webgazer.setGazeListener(null);  // Remove o listener para evitar capturas subsequentes
+    }
 }
 
-function eyeCapture() {
-    webgazer.setGazeListener(data => {
-        if (data) {
-            storeInter({ type: 'eye', x: Math.round(data.x), y: Math.round(data.y), class: mouse.class, id: mouse.id, value: null });
-        }
-    }).begin();
+function startAudioCapture() {
+    const recognition = new (window.webkitSpeechRecognition || window.SpeechRecognition)();
+
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = 'pt-BR';
+
+    recognition.start();
+
+    recognition.onresult = event => {
+        const lastResult = event.results[event.results.length - 1];
+        const transcript = lastResult[0].transcript;
+        const confidence = lastResult[0].confidence;
+
+        storeInter({
+            type: 'voice',
+            x: mouse.x,
+            y: mouse.y,
+            class: mouse.class,
+            id: mouse.id,
+            value: { text: transcript, confidence: confidence }
+        });
+    };
+
+    recognition.onerror = event => {
+        console.error(`Erro no reconhecimento de voz: ${event.error}`);
+    };
 }
 
 function faceCapture() {
@@ -207,7 +233,7 @@ function startRecording() {
                 if (setting === 'keyboard') setupKeyboardListeners();
                 if (setting === 'camera') {
                     webgazer.begin().then(setupWebGazerVideo);
-                    faceInterval = setInterval(faceCapture, 10000); // Executar a captura da face a cada 10 segundos
+                    faceInterval = setInterval(faceCapture, 5000); // Executar a captura da face a cada 10 segundos
                     eyeInterval = setInterval(eyeCapture, 2000); // Executar a captura de olho a cada 2 segundos
                 }
                 if (setting === 'microphone') setupMicrophoneListeners();
@@ -247,6 +273,7 @@ function stopRecording() {
 
     // Parar qualquer timeout ativo
     clearTimeout(freezeInterval);
+    clearTimeout(mouseTimeout);
 
     // Opcionalmente, você pode limpar o dicionário de dados
     Object.keys(dataDict).forEach(key => dataDict[key] = []);
@@ -263,7 +290,7 @@ function initializeContent() {
     });
 }
 contentInterval = setInterval(initializeContent, 1000);
-chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
     if (request.type === "stopRecording") {
         stopRecording();
     }

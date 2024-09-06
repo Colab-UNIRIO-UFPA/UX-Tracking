@@ -18,7 +18,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
             chrome.storage.sync.get(['authToken'], function (data) {
                 userId = data.authToken;
             });
-            break;
+            return true;
         case "stopRecording":
             // Enviar a mensagem para o content.js
             chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
