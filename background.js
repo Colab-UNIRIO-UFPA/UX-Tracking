@@ -1,4 +1,4 @@
-const serverUrl = "http://localhost/external";
+const serverUrl = "https://uxtracking.liis.com.br/external";
 // Cria um objeto Date com a data e hora atuais
 var datetime = new Date();
 var userId = '';
